@@ -1,0 +1,5 @@
+bin/*
+sln/*
+!sln/HitotsuNoHikari.sln
+!sln/HitotsuNoHikari.vcxproj
+!sln/HitotsuNoHikari.filters
