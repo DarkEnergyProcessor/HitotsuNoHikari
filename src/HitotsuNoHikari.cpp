@@ -31,6 +31,31 @@
 // We don't need the GZip compression. Just zLib-compatible.
 extern "C" void ZopfliGzipCompress(const ZopfliOptions* options,const unsigned char* in, size_t insize,unsigned char** out, size_t* outsize) {}
 
+// Copied from Itsudemo TEXBLoad.cpp line 36 @ 78d1f72f17a22cbcbddb7646a88ad39e77153130
+uint8_t GetBytePerPixel(uint16_t TexbFlags)
+{
+	uint8_t iff=TexbFlags&7;
+	switch(uint8_t(TexbFlags)>>6)
+	{
+		case 0:
+		case 1:
+		case 2:
+			return 2;
+		case 3:
+		{
+			switch(iff)
+			{
+			case 0:
+				return 1;
+			default:
+				return iff;
+			}
+		}
+		default:
+			return 0;
+	}
+}
+
 inline const char* get_basename(const char* a)
 {
 	const char* b=strrchr(a,'\\'),* c=strrchr(a,'/');
@@ -56,14 +81,16 @@ int main(int argc,char* argv[])
 	ZopfliOptions zopt;
 	z_stream z_state;
 	uint32_t temp_int;
-	uint32_t width;
-	uint32_t height;
-	uint16_t texb_flags;
+	uint32_t texb_flags_pos;
 	uint32_t old_texb_size;
 	uint32_t new_texb_size;
+	uint16_t texb_flags;
+	uint16_t width;
+	uint16_t height;
 	uint8_t* texb_raw_buffer=NULL;
 	uint8_t* temp_dynamic_buffer=NULL;
 	uint8_t temp_buffer[16];
+	uint8_t bpp;
 
 	if(memcmp(argv[1],"-",2)==0) f=stdin;
 	else f=fopen(argv[1],"rb");
@@ -74,7 +101,7 @@ int main(int argc,char* argv[])
 	if(memcmp(temp_buffer,"TEXB",4))
 	{
 		fclose(f);
-		std::cerr << argv[1] << ": Not an TEXB file\n" << std::endl;
+		std::cerr << argv[1] << ": Not a TEXB file\n" << std::endl;
 		return -1;
 	}
 
@@ -84,8 +111,10 @@ int main(int argc,char* argv[])
 	fread(temp_buffer+8,2,2,f);
 	width=ntohs(*reinterpret_cast<uint16_t*>(temp_buffer+8));
 	height=ntohs(*reinterpret_cast<uint16_t*>(temp_buffer+10));
+	texb_flags_pos=ftell(f);
 	fread(temp_buffer+8,2,1,f);
 	texb_flags=ntohs(*reinterpret_cast<uint16_t*>(temp_buffer+8));
+	bpp=GetBytePerPixel(texb_flags);
 	fseek(f,4,SEEK_CUR);
 
 	fread(temp_buffer+8,2,1,f);
@@ -125,7 +154,7 @@ int main(int argc,char* argv[])
 				return temp_int;
 			}
 			
-			temp_int=width*height*4;
+			temp_int=width*height*bpp;
 			temp_dynamic_buffer=new uint8_t[old_texb_size];
 			texb_raw_buffer=new uint8_t[temp_int];
 			fread(temp_dynamic_buffer,1,old_texb_size,f);
@@ -159,7 +188,7 @@ int main(int argc,char* argv[])
 	else
 	{
 		std::cerr << "uncompressed" << std::endl;
-		temp_int=width*height*4;
+		temp_int=width*height*bpp;
 		texb_raw_buffer=new uint8_t[temp_int];
 		fread(texb_raw_buffer,1,temp_int,f);
 		std::cerr << "Uncompressed size: " << temp_int << std::endl;
@@ -167,9 +196,18 @@ int main(int argc,char* argv[])
 
 	std::cerr << std::endl;
 	size_t outsize=0;
+	char* numiter=getenv("HNH_NUMITER");
 	ZopfliInitOptions(&zopt);
 	zopt.numiterations=1;
-	ZopfliCompress(&zopt,ZOPFLI_FORMAT_ZLIB,texb_raw_buffer,width*height*4,&temp_dynamic_buffer,&outsize);
+
+	if(numiter!=NULL)
+	{
+		char* end;
+		zopt.numiterations=strtoul(numiter,&end,0);
+		if(zopt.numiterations==0 || *end!=0) zopt.numiterations=1;
+	}
+
+	ZopfliCompress(&zopt,ZOPFLI_FORMAT_ZLIB,texb_raw_buffer,width*height*bpp,&temp_dynamic_buffer,&outsize);
 
 	if(outsize==old_texb_size)
 	{
@@ -206,13 +244,13 @@ int main(int argc,char* argv[])
 	fwrite("\0\0\0",4,1,f);
 	fwrite(texb_raw_buffer,1,outsize,f);
 	new_texb_size=ftell(f);
+	fflush(f);
 	fseek(f,4,SEEK_SET);
 	temp_int=htonl(new_texb_size-8);
 	fwrite(&temp_int,4,1,f);
 	
 	// Change flags
-	fread(temp_buffer+8,2,1,f);
-	fseek(f,ntohs(*reinterpret_cast<uint16_t*>(temp_buffer+8))+4,SEEK_CUR);
+	fseek(f,texb_flags_pos,SEEK_SET);
 	*reinterpret_cast<uint16_t*>(temp_buffer+8)=htons(texb_flags|8);
 	fwrite(temp_buffer+8,2,1,f);
 
